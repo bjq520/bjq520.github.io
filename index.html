@@ -2315,16 +2315,22 @@
     const GB_LIMIT = 50;
     let gbSending = false;
 
-    function gbApi(query, options) {
+    async function gbApi(query, options) {
       options = options || {};
-      return fetch(SUPABASE_URL + '/rest/v1/' + query, {
-        method: options.method || 'GET',
-        headers: Object.assign({
-          'apikey': SUPABASE_KEY,
-          'Content-Type': 'application/json'
-        }, options.headers || {}),
-        body: options.body
-      });
+      const url = SUPABASE_URL + '/rest/v1/' + query;
+      const base = { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' };
+      function send(extra) {
+        return fetch(url, {
+          method: options.method || 'GET',
+          headers: Object.assign({}, base, extra || {}, options.headers || {}),
+          body: options.body
+        });
+      }
+      let res = await send();
+      if (res.status === 401) {
+        res = await send({ 'Authorization': 'Bearer ' + SUPABASE_KEY });
+      }
+      return res;
     }
 
     function escapeHtml(str) {
@@ -2369,7 +2375,16 @@
       gbNotice('正在加载留言…');
       try {
         const res = await gbApi('messages?select=name,type,content,created_at&order=created_at.desc&limit=' + GB_LIMIT);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (!res.ok) {
+          const detail = await res.text().catch(function () { return ''; });
+          console.warn('[guestbook] 读取失败', res.status, detail);
+          if (res.status === 404) {
+            gbNotice('留言板还没初始化完成，过一会儿再来看看～');
+          } else {
+            gbNotice('留言暂时加载不出来。可以直接发邮件给我：<a href="mailto:' + GB_EMAIL + '">' + GB_EMAIL + '</a>');
+          }
+          return;
+        }
         renderMessages(await res.json());
       } catch (err) {
         console.warn('[guestbook] 读取失败', err);
