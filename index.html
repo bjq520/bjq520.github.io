@@ -2306,109 +2306,127 @@
       dreamObserver.observe(dreamFill);
     }
 
-    // Guestbook functionality
+    // ===== 留言板：Supabase 后端（真存数据库，所有人可见） =====
     const gbForm = document.getElementById('guestbookForm');
     const gbList = document.getElementById('guestbookList');
-    const STORAGE_KEY = 'portfolio_guestbook';
+    const SUPABASE_URL = 'https://tbrnxeiawcgjkntvpae.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_CJlLnds57ZnCdr6sERjNqA_Uq58ItBp';
+    const GB_EMAIL = '739868746@qq.com';
+    const GB_LIMIT = 50;
+    let gbSending = false;
 
-    // Seed messages for demo
-    const seedMessages = [
-      {
-        name: '路过的网友',
-        type: '随便聊聊',
-        content: '你的网站好有意思！那些入坑项目我也全都试过哈哈哈哈',
-        date: Date.now() - 86400000 * 3
-      },
-      {
-        name: 'AI爱好者',
-        type: '工具分享',
-        content: '推荐一个叫 Obsidian 的笔记软件，用来整理知识超级好用！',
-        date: Date.now() - 86400000 * 2
-      },
-      {
-        name: '踩坑前辈',
-        type: '踩坑吐槽',
-        content: '学画画被坑+1，那些网课真的套路太深了…',
-        date: Date.now() - 86400000
-      }
-    ];
-
-    function getMessages() {
-      try {
-        const data = localStorage.getItem(STORAGE_KEY);
-        if (data) return JSON.parse(data);
-      } catch(e) {}
-      return seedMessages;
+    function gbApi(query, options) {
+      options = options || {};
+      return fetch(SUPABASE_URL + '/rest/v1/' + query, {
+        method: options.method || 'GET',
+        headers: Object.assign({
+          'apikey': SUPABASE_KEY,
+          'Content-Type': 'application/json'
+        }, options.headers || {}),
+        body: options.body
+      });
     }
 
-    function saveMessages(messages) {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-      } catch(e) {}
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : String(str);
+      return div.innerHTML;
     }
 
-    function formatDate(ts) {
-      const d = new Date(ts);
+    function formatDate(value) {
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return '';
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, '0');
       const day = String(d.getDate()).padStart(2, '0');
       const h = String(d.getHours()).padStart(2, '0');
       const min = String(d.getMinutes()).padStart(2, '0');
-      return `${y}-${m}-${day} ${h}:${min}`;
+      return y + '-' + m + '-' + day + ' ' + h + ':' + min;
     }
 
-    function renderMessages() {
-      const messages = getMessages();
-      if (messages.length === 0) {
-        gbList.innerHTML = '<div class="guestbook-empty">还没有留言，来当第一个吧～</div>';
+    function gbNotice(html) {
+      if (!gbList) return;
+      gbList.innerHTML = '<div class="guestbook-empty">' + html + '</div>';
+    }
+
+    function renderMessages(messages) {
+      if (!messages || messages.length === 0) {
+        gbNotice('还没有留言，来当第一个吧～');
         return;
       }
-      gbList.innerHTML = messages
-        .slice()
-        .reverse()
-        .map(msg => `
-          <div class="guestbook-item">
-            <div class="guestbook-item-header">
-              <span class="guestbook-name">${escapeHtml(msg.name)} · ${escapeHtml(msg.type)}</span>
-              <span class="guestbook-date">${formatDate(msg.date)}</span>
-            </div>
-            <div class="guestbook-content">${escapeHtml(msg.content)}</div>
-          </div>
-        `).join('');
+      gbList.innerHTML = messages.map(function (msg) {
+        return '<div class="guestbook-item">' +
+          '<div class="guestbook-item-header">' +
+            '<span class="guestbook-name">' + escapeHtml(msg.name) + ' · ' + escapeHtml(msg.type) + '</span>' +
+            '<span class="guestbook-date">' + formatDate(msg.created_at) + '</span>' +
+          '</div>' +
+          '<div class="guestbook-content">' + escapeHtml(msg.content) + '</div>' +
+        '</div>';
+      }).join('');
     }
 
-    function escapeHtml(str) {
-      const div = document.createElement('div');
-      div.textContent = str;
-      return div.innerHTML;
+    async function loadMessages() {
+      gbNotice('正在加载留言…');
+      try {
+        const res = await gbApi('messages?select=name,type,content,created_at&order=created_at.desc&limit=' + GB_LIMIT);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        renderMessages(await res.json());
+      } catch (err) {
+        console.warn('[guestbook] 读取失败', err);
+        gbNotice('留言暂时加载不出来（网络原因）。可以直接发邮件给我：<a href="mailto:' + GB_EMAIL + '">' + GB_EMAIL + '</a>');
+      }
     }
 
-    gbForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const name = document.getElementById('gbName').value.trim();
-      const type = document.getElementById('gbType').value;
-      const content = document.getElementById('gbContent').value.trim();
+    function gbFallbackToEmail(name, type, content) {
+      const subject = encodeURIComponent('网站留言 · ' + name + ' · ' + type);
+      const body = encodeURIComponent(content + '\n\n—— ' + name);
+      window.location.href = 'mailto:' + GB_EMAIL + '?subject=' + subject + '&body=' + body;
+    }
 
-      if (!name || !content) return;
+    if (gbForm) {
+      gbForm.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        if (gbSending) return;
 
-      const messages = getMessages();
-      messages.push({
-        name,
-        type,
-        content,
-        date: Date.now()
+        const name = document.getElementById('gbName').value.trim();
+        const type = document.getElementById('gbType').value;
+        const content = document.getElementById('gbContent').value.trim();
+        if (!name || !content) return;
+
+        if (name.length > 20) { alert('名字最多 20 个字'); return; }
+        if (content.length > 500) { alert('留言最多 500 个字'); return; }
+
+        const last = Number(localStorage.getItem('gb_last_sent') || 0);
+        if (Date.now() - last < 20000) { alert('刚发过啦，歇 20 秒再发～'); return; }
+
+        const btn = gbForm.querySelector('button[type="submit"]');
+        const label = btn ? btn.textContent : '';
+        gbSending = true;
+        if (btn) { btn.disabled = true; btn.textContent = '发送中…'; }
+
+        try {
+          const res = await gbApi('messages', {
+            method: 'POST',
+            headers: { 'Prefer': 'return=representation' },
+            body: JSON.stringify({ name: name, type: type, content: content })
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          localStorage.setItem('gb_last_sent', String(Date.now()));
+          gbForm.reset();
+          await loadMessages();
+          gbList.scrollTop = 0;
+        } catch (err) {
+          console.warn('[guestbook] 提交失败', err);
+          const go = confirm('留言没能存进服务器（可能是网络问题）。\n\n要不要改用邮件发给我？内容会自动填好。');
+          if (go) gbFallbackToEmail(name, type, content);
+        } finally {
+          gbSending = false;
+          if (btn) { btn.disabled = false; btn.textContent = label; }
+        }
       });
-      saveMessages(messages);
-      renderMessages();
 
-      gbForm.reset();
-
-      // Scroll to show the new message
-      gbList.scrollTop = 0;
-    });
-
-    // Initial render
-    renderMessages();
+      loadMessages();
+    }
 
     // 点击闪光效果
     document.addEventListener('click', (e) => {
