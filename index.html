@@ -2376,19 +2376,20 @@
       try {
         const res = await gbApi('messages?select=name,type,content,created_at&order=created_at.desc&limit=' + GB_LIMIT);
         if (!res.ok) {
-          const detail = await res.text().catch(function () { return ''; });
+          const detail = (await res.text().catch(function () { return ''; })).slice(0, 160);
           console.warn('[guestbook] 读取失败', res.status, detail);
           if (res.status === 404) {
             gbNotice('留言板还没初始化完成，过一会儿再来看看～');
           } else {
-            gbNotice('留言暂时加载不出来。可以直接发邮件给我：<a href="mailto:' + GB_EMAIL + '">' + GB_EMAIL + '</a>');
+            gbNotice('读取失败 [' + res.status + '] ' + escapeHtml(detail) + '<br>可以直接发邮件给我：<a href="mailto:' + GB_EMAIL + '">' + GB_EMAIL + '</a>');
           }
           return;
         }
         renderMessages(await res.json());
       } catch (err) {
         console.warn('[guestbook] 读取失败', err);
-        gbNotice('留言暂时加载不出来（网络原因）。可以直接发邮件给我：<a href="mailto:' + GB_EMAIL + '">' + GB_EMAIL + '</a>');
+        const why = (err && err.message) ? err.message : '未知';
+        gbNotice('网络连不上留言服务器（' + escapeHtml(why) + '）。可以直接发邮件给我：<a href="mailto:' + GB_EMAIL + '">' + GB_EMAIL + '</a>');
       }
     }
 
@@ -2419,20 +2420,26 @@
         gbSending = true;
         if (btn) { btn.disabled = true; btn.textContent = '发送中…'; }
 
+        let errDetail = '';
         try {
           const res = await gbApi('messages', {
             method: 'POST',
             headers: { 'Prefer': 'return=representation' },
             body: JSON.stringify({ name: name, type: type, content: content })
           });
-          if (!res.ok) throw new Error('HTTP ' + res.status);
+          if (!res.ok) {
+            const body = (await res.text().catch(function () { return ''; })).slice(0, 160);
+            errDetail = 'HTTP ' + res.status + (body ? ' · ' + body : '');
+            throw new Error(errDetail);
+          }
           localStorage.setItem('gb_last_sent', String(Date.now()));
           gbForm.reset();
           await loadMessages();
           gbList.scrollTop = 0;
         } catch (err) {
+          if (!errDetail) errDetail = (err && err.message) ? err.message : '未知（多半是网络不通）';
           console.warn('[guestbook] 提交失败', err);
-          const go = confirm('留言没能存进服务器（可能是网络问题）。\n\n要不要改用邮件发给我？内容会自动填好。');
+          const go = confirm('留言没能存进服务器。\n\n原因：' + errDetail + '\n\n要不要改用邮件发给我？内容会自动填好。');
           if (go) gbFallbackToEmail(name, type, content);
         } finally {
           gbSending = false;
